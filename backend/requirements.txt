@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+pandas
+numpy
+python-multipart
+pydantic
+python-dotenv
+psycopg2-binary
+pdfplumber
+cryptography
+openai
+langchain
+jupyter
+ipykernel
+fpdf

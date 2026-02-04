@@ -1,0 +1,6 @@
+date,category,description,amount,type
+2024-01-01,Revenue,Product Sales,5000.00,credit
+2024-01-02,Expenses,Office Rent,1200.00,debit
+2024-01-05,Revenue,Consulting,2500.00,credit
+2024-01-10,Expenses,AWS Cloud,300.00,debit
+2024-01-15,Receivables,Invoice #104,1500.00,credit
