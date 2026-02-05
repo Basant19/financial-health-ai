@@ -8,7 +8,7 @@ python-dotenv
 psycopg2-binary
 pdfplumber
 cryptography
-openai
+langchain-google-genai
 langchain
 jupyter
 ipykernel
