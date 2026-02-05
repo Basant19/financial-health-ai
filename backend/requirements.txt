@@ -10,6 +10,8 @@ pdfplumber
 cryptography
 langchain-google-genai
 langchain
+langgraph
 jupyter
 ipykernel
 fpdf
+pytest
