@@ -16,3 +16,4 @@ ipykernel
 fpdf
 pytest
 sqlalchemy
+langsmith
