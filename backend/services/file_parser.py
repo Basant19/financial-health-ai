@@ -2,7 +2,7 @@ import os
 import sys
 import pandas as pd
 import pdfplumber
-from typing import Optional
+from typing import Optional, List
 
 from backend.utils.logger import get_logger
 from backend.utils.exceptions import CustomException
@@ -16,6 +16,9 @@ class FileParser:
     def __init__(self):
         self.logger = get_logger(self.__class__.__name__)
 
+    # -----------------------------
+    # CSV
+    # -----------------------------
     def parse_csv(self, file_path: str) -> pd.DataFrame:
         try:
             self.logger.info(f"Parsing CSV file: {file_path}")
@@ -24,6 +27,9 @@ class FileParser:
             self.logger.error("CSV parsing failed", exc_info=True)
             raise CustomException(e, sys)
 
+    # -----------------------------
+    # Excel
+    # -----------------------------
     def parse_excel(self, file_path: str) -> pd.DataFrame:
         try:
             self.logger.info(f"Parsing Excel file: {file_path}")
@@ -32,12 +38,15 @@ class FileParser:
             self.logger.error("Excel parsing failed", exc_info=True)
             raise CustomException(e, sys)
 
+    # -----------------------------
+    # PDF (CSV-like text)
+    # -----------------------------
     def parse_pdf(self, file_path: str) -> pd.DataFrame:
         """
-        Naive PDF table parser.
-        Improves later with layout-aware extraction.
+        PDF parser for CSV-style financial PDFs.
+        Assumes comma-separated rows rendered as text.
         """
-        all_rows = []
+        rows: List[List[str]] = []
 
         try:
             self.logger.info(f"Parsing PDF file: {file_path}")
@@ -46,29 +55,51 @@ class FileParser:
                 for page_number, page in enumerate(pdf.pages, start=1):
                     text = page.extract_text()
                     if not text:
-                        self.logger.warning(
-                            f"No text found on page {page_number}"
-                        )
+                        self.logger.warning(f"No text found on page {page_number}")
                         continue
 
                     for line in text.split("\n"):
-                        columns = [c.strip() for c in line.split(",")]
-                        all_rows.append(columns)
+                        line = line.strip()
+                        if not line:
+                            continue
 
-            df = pd.DataFrame(all_rows)
+                        columns = [c.strip() for c in line.split(",")]
+                        rows.append(columns)
+
+            if not rows:
+                raise ValueError("No tabular data found in PDF")
+
+            # Create raw DataFrame
+            df = pd.DataFrame(rows)
+
+            # -----------------------------
+            # 🔑 HEADER NORMALIZATION
+            # -----------------------------
+            df.columns = df.iloc[0]
+            df = df.iloc[1:].reset_index(drop=True)
+
+            # Drop completely empty rows
+            df.dropna(how="all", inplace=True)
+
+            self.logger.info(
+                f"PDF parsed successfully with columns: {list(df.columns)}"
+            )
+
             return df
 
         except Exception as e:
             self.logger.error("PDF parsing failed", exc_info=True)
             raise CustomException(e, sys)
 
+    # -----------------------------
+    # File Router
+    # -----------------------------
     def parse_file(self, file_path: str) -> pd.DataFrame:
         try:
             if not os.path.exists(file_path):
                 raise FileNotFoundError(f"File not found: {file_path}")
 
             extension = file_path.split(".")[-1].lower()
-
             self.logger.info(f"Detected file extension: {extension}")
 
             if extension == "csv":

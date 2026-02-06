@@ -1,137 +1,245 @@
-from typing import TypedDict, List
+# backend/services/ai_service.py
+
+import os
+import sys
+import json
+from typing import TypedDict, Dict, Any
+
+from dotenv import load_dotenv
 from langgraph.graph import StateGraph, START, END
 from langchain.chat_models import init_chat_model
 from langchain.messages import SystemMessage, HumanMessage
-import os
-from dotenv import load_dotenv
+
+from backend.utils.logger import get_logger
+from backend.utils.exceptions import CustomException
 
 # -----------------------------
 # Load environment variables
 # -----------------------------
 load_dotenv()
 
-llm = init_chat_model(
-    "google_genai:gemini-2.5-flash",
-    api_key=os.getenv("GOOGLE_API_KEY"),
-    max_output_tokens=400,   # 👈 keep each node small
-)
 
 # -----------------------------
-# Graph State
+# LangGraph State
 # -----------------------------
 class FinancialAIState(TypedDict):
     metrics_context: str
     risk_context: str
-    health_summary: str
-    risk_explanation: str
-    suggestions: str
-    final_report: str
+    ai_result: Dict[str, Any]
 
 
-# -----------------------------
-# Node 1: Health Summary
-# -----------------------------
-def health_summary_node(state: FinancialAIState):
-    prompt = (
-        "You are a financial analyst for Indian SMEs.\n"
-        "Explain the overall financial health clearly and simply.\n\n"
-        f"{state['metrics_context']}"
-    )
+class FinancialAIService:
+    """
+    Unified AI explanation layer.
 
-    response = llm.invoke([
-        SystemMessage(content="Explain only what is visible in the data."),
-        HumanMessage(content=prompt)
-    ])
+    PRINCIPLES:
+    - AI NEVER computes numbers
+    - AI NEVER invents risks
+    - ONE LLM call per request
+    - Strict JSON output
+    - Deterministic fallback on quota / failure
+    """
 
-    return {"health_summary": response.content}
+    def __init__(self):
+        try:
+            self.logger = get_logger(self.__class__.__name__)
 
+            self.llm = init_chat_model(
+                "google_genai:gemini-2.5-flash",
+                api_key=os.getenv("GOOGLE_API_KEY"),
+                temperature=0.2,        # conservative narrative
+                max_output_tokens=500,  # bounded cost
+            )
 
-# -----------------------------
-# Node 2: Risk Explanation
-# -----------------------------
-def risk_explanation_node(state: FinancialAIState):
-    prompt = (
-        "Explain the following financial risks in simple language.\n"
-        "Do not introduce new risks.\n\n"
-        f"{state['risk_context']}"
-    )
+            self.logger.info(
+                "FinancialAIService initialized (single-call, quota-safe mode)"
+            )
 
-    response = llm.invoke([
-        SystemMessage(content="Explain risks conservatively and clearly."),
-        HumanMessage(content=prompt)
-    ])
+        except Exception as e:
+            raise CustomException(e, sys)
 
-    return {"risk_explanation": response.content}
+    # -----------------------------
+    # Unified AI Node (ONE call)
+    # -----------------------------
+    def ai_analysis_node(self, state: FinancialAIState) -> Dict[str, Any]:
+        """
+        Converts deterministic metrics + risks
+        into structured explanations.
+        """
+        try:
+            self.logger.info("Running unified AI analysis node")
 
+            prompt = f"""
+You are a financial analyst for Indian SMEs.
 
-# -----------------------------
-# Node 3: Improvement Suggestions
-# -----------------------------
-def suggestions_node(state: FinancialAIState):
-    prompt = (
-        "Based on the metrics and risks below, suggest practical improvements.\n"
-        "Focus on cash flow, cost control, and credit readiness.\n\n"
-        f"{state['metrics_context']}\n\n{state['risk_context']}"
-    )
+STRICT RULES (NON-NEGOTIABLE):
+- Do NOT invent numbers
+- Do NOT introduce new risks
+- Use ONLY the provided information
+- Output VALID JSON ONLY
+- No markdown, no explanations outside JSON
 
-    response = llm.invoke([
-        SystemMessage(content="Give realistic, SME-friendly advice."),
-        HumanMessage(content=prompt)
-    ])
+INPUT DATA
+----------------
+METRICS:
+{state['metrics_context']}
 
-    return {"suggestions": response.content}
+RISKS:
+{state['risk_context']}
 
-
-# -----------------------------
-# Node 4: Final Compiler (NO analysis)
-# -----------------------------
-def final_compiler_node(state: FinancialAIState):
-    final_text = f"""
-📊 OVERALL FINANCIAL HEALTH
-{state['health_summary']}
-
-⚠️ RISK ANALYSIS
-{state['risk_explanation']}
-
-✅ IMPROVEMENT RECOMMENDATIONS
-{state['suggestions']}
+OUTPUT FORMAT (JSON ONLY):
+{{
+  "health_summary": "...",
+  "risk_explanation": "...",
+  "improvement_recommendations": "..."
+}}
 """
-    return {"final_report": final_text.strip()}
 
+            response = self.llm.invoke(
+                [
+                    SystemMessage(
+                        content=(
+                            "You generate conservative, factual, structured "
+                            "financial explanations for regulated environments."
+                        )
+                    ),
+                    HumanMessage(content=prompt),
+                ]
+            )
 
-# -----------------------------
-# Build LangGraph
-# -----------------------------
-graph = StateGraph(FinancialAIState)
+            parsed = json.loads(response.content)
 
-graph.add_node("health_summary", health_summary_node)
-graph.add_node("risk_explanation", risk_explanation_node)
-graph.add_node("suggestions", suggestions_node)
-graph.add_node("final_compiler", final_compiler_node)
+            # -----------------------------
+            # Hard validation (defensive)
+            # -----------------------------
+            required_keys = {
+                "health_summary",
+                "risk_explanation",
+                "improvement_recommendations",
+            }
 
-# Parallel execution
-graph.add_edge(START, "health_summary")
-graph.add_edge(START, "risk_explanation")
-graph.add_edge(START, "suggestions")
+            for key in required_keys:
+                if key not in parsed or not isinstance(parsed[key], str):
+                    raise ValueError(f"Missing or invalid field: {key}")
 
-graph.add_edge("health_summary", "final_compiler")
-graph.add_edge("risk_explanation", "final_compiler")
-graph.add_edge("suggestions", "final_compiler")
+            return {"ai_result": parsed}
 
-graph.add_edge("final_compiler", END)
+        except Exception:
+            # Quota / JSON / model failure → deterministic fallback
+            self.logger.error(
+                "Unified AI node failed — falling back to deterministic output",
+                exc_info=True,
+            )
+            try:
+                return {"ai_result": self._fallback_json(state)}
+            except Exception as fallback_err:
+                self.logger.critical(
+                    "Fallback JSON failed — returning empty structure", exc_info=True
+                )
+                return {
+                    "ai_result": {
+                        "health_summary": "",
+                        "risk_explanation": "",
+                        "improvement_recommendations": "",
+                    }
+                }
 
-workflow = graph.compile()
+    # -----------------------------
+    # Deterministic, Data-Aware Fallback
+    # -----------------------------
+    def _fallback_json(self, state: FinancialAIState) -> Dict[str, str]:
+        """
+        Zero-LLM fallback.
 
-state_input = {
-    "metrics_context": build_ai_context(clean_metrics, []),
-    "risk_context": "\n".join(risk_flags),
-    "health_summary": "",
-    "risk_explanation": "",
-    "suggestions": "",
-    "final_report": ""
-}
+        Uses REAL computed metrics & risks.
+        No hallucination. No dummy text.
+        """
+        metrics_text = state.get("metrics_context", "").strip()
+        risk_text = state.get("risk_context", "").strip()
 
-final_state = workflow.invoke(state_input)
+        health_summary = (
+            "Financial health assessment is based on deterministic metrics "
+            "computed from the provided financial data.\n\n"
+            f"{metrics_text}"
+        )
 
-print("\n===== AI FINANCIAL SUMMARY =====\n")
-print(final_state["final_report"])
+        risk_explanation = (
+            "Financial risks are identified using transparent rule-based "
+            "logic applied to profitability, cash flow stability, and "
+            "expense patterns.\n\n"
+            f"{risk_text}"
+        )
+
+        improvement_recommendations = (
+            "Improvement recommendations are derived from observed metric "
+            "signals:\n"
+            "- Strengthen cash flow consistency where volatility exists\n"
+            "- Maintain expense discipline relative to revenue\n"
+            "- Improve credit readiness through sustained operating surplus\n\n"
+            "These actions directly reflect the calculated metrics and "
+            "identified risk levels."
+        )
+
+        return {
+            "health_summary": health_summary.strip(),
+            "risk_explanation": risk_explanation.strip(),
+            "improvement_recommendations": improvement_recommendations.strip(),
+        }
+
+    # -----------------------------
+    # Public API (used by routes)
+    # -----------------------------
+    def generate_financial_report(
+        self,
+        metrics_context: str,
+        risk_context: str,
+    ) -> str:
+        """
+        Generates the final narrative financial report.
+        """
+        try:
+            self.logger.info("Starting AI financial report generation")
+
+            graph = StateGraph(FinancialAIState)
+
+            graph.add_node("ai_analysis", self.ai_analysis_node)
+            graph.add_edge(START, "ai_analysis")
+            graph.add_edge("ai_analysis", END)
+
+            workflow = graph.compile()
+
+            final_state = workflow.invoke(
+                {
+                    "metrics_context": metrics_context,
+                    "risk_context": risk_context,
+                    "ai_result": {},
+                }
+            )
+
+            ai = final_state["ai_result"]
+
+            final_report = f"""
+OVERALL FINANCIAL HEALTH
+{ai.get("health_summary", "")}
+
+RISK ANALYSIS
+{ai.get("risk_explanation", "")}
+
+IMPROVEMENT RECOMMENDATIONS
+{ai.get("improvement_recommendations", "")}
+""".strip()
+
+            self.logger.info("AI financial report generated successfully")
+            return final_report
+
+        except Exception:
+            self.logger.error(
+                "AI financial report generation failed",
+                exc_info=True,
+            )
+            # Always safe fallback
+            return self._fallback_json({
+                "metrics_context": metrics_context,
+                "risk_context": risk_context,
+                "ai_result": {}
+            })

@@ -1,72 +1,144 @@
+# E:\financial-health-ai\backend\services\metrics.py
+
+import sys
 import pandas as pd
 from typing import Dict
 
-REQUIRED_COLUMNS = {
-    "date",
-    "category",
-    "description",
-    "amount",
-    "type"   # credit / debit
-}
-def validate_dataframe(df: pd.DataFrame):
-    missing = REQUIRED_COLUMNS - set(df.columns)
-    if missing:
-        raise ValueError(f"Missing required columns: {missing}")
-
-REQUIRED_COLUMNS = {"date", "category", "amount", "type"}
-def validate_dataframe(df: pd.DataFrame):
-    missing = REQUIRED_COLUMNS - set(df.columns)
-    if missing:
-        raise ValueError(f"Missing required columns: {missing}")
-    
-def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-
-    df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
-    df["type"] = df["type"].str.lower().str.strip()
-    df["category"] = df["category"].str.strip()
-
-    return df
-
-def calculate_total_revenue(df: pd.DataFrame) -> float:
-    revenue_df = df[df["type"] == "credit"]
-    return revenue_df["amount"].sum()
-
-def calculate_total_expenses(df: pd.DataFrame) -> float:
-    expense_df = df[df["type"] == "debit"]
-    return expense_df["amount"].sum()
-
-def calculate_net_cashflow(df: pd.DataFrame) -> float:
-    revenue = calculate_total_revenue(df)
-    expenses = calculate_total_expenses(df)
-    return revenue - expenses
-
-def category_breakdown(df: pd.DataFrame) -> Dict[str, float]:
-    grouped = df.groupby("category")["amount"].sum()
-    return grouped.to_dict()
+from backend.utils.logger import get_logger
+from backend.utils.exceptions import CustomException
 
 
-def monthly_cashflow(df: pd.DataFrame) -> Dict[str, float]:
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    df["month"] = df["date"].dt.to_period("M").astype(str)
+class FinancialMetrics:
+    """
+    Responsible for validating, normalizing,
+    and computing financial metrics from transaction data.
+    """
 
-    monthly = df.groupby("month").apply(
-        lambda x: x[x["type"] == "credit"]["amount"].sum()
+    REQUIRED_COLUMNS = {"date", "category", "amount", "type"}  # credit / debit
+
+    def __init__(self):
+        self.logger = get_logger(self.__class__.__name__)
+
+    def validate_dataframe(self, df: pd.DataFrame) -> None:
+        try:
+            self.logger.info("Validating dataframe columns")
+            missing = self.REQUIRED_COLUMNS - set(df.columns)
+            if missing:
+                raise ValueError(f"Missing required columns: {missing}")
+        except Exception as e:
+            self.logger.error("Dataframe validation failed", exc_info=True)
+            raise CustomException(e, sys)
+
+    def normalize_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        try:
+            self.logger.info("Normalizing dataframe")
+            df = df.copy()
+
+            # -----------------------------
+            # Convert amounts to numeric
+            # -----------------------------
+            df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
+
+            # -----------------------------
+            # Normalize type & category
+            # -----------------------------
+            df["type"] = df["type"].astype(str).str.lower().str.strip()
+            df["category"] = df["category"].astype(str).str.strip()
+
+            # -----------------------------
+            # Map legacy CSV types → credit/debit
+            # -----------------------------
+            df["type"] = df["type"].replace({"income": "credit", "expense": "debit"})
+
+            return df
+        except Exception as e:
+            self.logger.error("Dataframe normalization failed", exc_info=True)
+            raise CustomException(e, sys)
+
+    def calculate_total_revenue(self, df: pd.DataFrame) -> float:
+        try:
+            revenue = df[df["type"] == "credit"]["amount"].sum()
+            self.logger.info(f"Total revenue calculated: {revenue}")
+            return revenue
+        except Exception as e:
+            self.logger.error("Revenue calculation failed", exc_info=True)
+            raise CustomException(e, sys)
+
+    def calculate_total_expenses(self, df: pd.DataFrame) -> float:
+        try:
+            expenses = df[df["type"] == "debit"]["amount"].sum()
+            self.logger.info(f"Total expenses calculated: {expenses}")
+            return expenses
+        except Exception as e:
+            self.logger.error("Expense calculation failed", exc_info=True)
+            raise CustomException(e, sys)
+
+    def calculate_net_cashflow(self, df: pd.DataFrame) -> float:
+        try:
+            revenue = self.calculate_total_revenue(df)
+            expenses = self.calculate_total_expenses(df)
+            net_cashflow = revenue - expenses
+
+            self.logger.info(f"Net cashflow calculated: {net_cashflow}")
+            return net_cashflow
+        except Exception as e:
+            self.logger.error("Net cashflow calculation failed", exc_info=True)
+            raise CustomException(e, sys)
+
+    def category_breakdown(self, df: pd.DataFrame) -> Dict[str, float]:
+        try:
+            breakdown = df.groupby("category")["amount"].sum().to_dict()
+            self.logger.info("Category breakdown calculated")
+            return breakdown
+        except Exception as e:
+            self.logger.error("Category breakdown failed", exc_info=True)
+            raise CustomException(e, sys)
+
+    def monthly_cashflow(self, df: pd.DataFrame) -> Dict[str, float]:
+        try:
+            self.logger.info("Calculating monthly cashflow")
+            df = df.copy()
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            df["month"] = df["date"].dt.to_period("M").astype(str)
+
+            monthly = df.groupby("month").apply(
+                lambda x: x[x["type"] == "credit"]["amount"].sum()
                 - x[x["type"] == "debit"]["amount"].sum()
-    )
+            )
 
-    return monthly.to_dict()
+            return monthly.to_dict()
+        except Exception as e:
+            self.logger.error("Monthly cashflow calculation failed", exc_info=True)
+            raise CustomException(e, sys)
 
-def compute_financial_metrics(df: pd.DataFrame) -> Dict:
-    validate_dataframe(df)
-    df = normalize_dataframe(df)
+    def compute_financial_metrics(self, df: pd.DataFrame) -> Dict:
+        """
+        Orchestrates all metric calculations
+        """
+        try:
+            self.logger.info("Starting financial metrics computation")
 
-    metrics = {
-        "total_revenue": calculate_total_revenue(df),
-        "total_expenses": calculate_total_expenses(df),
-        "net_cashflow": calculate_net_cashflow(df),
-        "category_breakdown": category_breakdown(df),
-        "monthly_cashflow": monthly_cashflow(df)
-    }
+            self.validate_dataframe(df)
+            df = self.normalize_dataframe(df)
 
-    return metrics
+            metrics = {
+                "total_revenue": self.calculate_total_revenue(df),
+                "total_expenses": self.calculate_total_expenses(df),
+                "net_cashflow": self.calculate_net_cashflow(df),
+                "category_breakdown": self.category_breakdown(df),
+                "monthly_cashflow": self.monthly_cashflow(df),
+            }
+
+            # Optional derived metrics
+            metrics["expense_ratio"] = (
+                metrics["total_expenses"] / metrics["total_revenue"]
+                if metrics["total_revenue"] > 0
+                else 0
+            )
+
+            self.logger.info("Financial metrics computation completed")
+            return metrics
+
+        except Exception as e:
+            self.logger.error("Financial metrics computation failed", exc_info=True)
+            raise CustomException(e, sys)
