@@ -1,0 +1,23 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    # This ensures Python looks in /app for the 'database' folder
+    environment:
+      - PYTHONPATH=/app
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        - REACT_APP_API_URL=http://localhost:8080
+    ports:
+      - "80:80"
+    depends_on:
+      - backend

@@ -1,7 +1,7 @@
 import axios from 'axios';
 
-// HARDCODE the URL directly so Vercel has no choice but to use it
-const API_BASE_URL = "https://financial-health-ai-bb7t.onrender.com";
+// Standard Node environment variable (No Vite prefix)
+const API_BASE_URL = process.env.REACT_APP_API_URL || "";
 
 export const uploadAndAnalyze = async (file, businessType = "Retail", language = "en") => {
   const formData = new FormData();
@@ -10,7 +10,6 @@ export const uploadAndAnalyze = async (file, businessType = "Retail", language =
   formData.append('language', language);
 
   try {
-    // We are calling the live Render URL now
     const response = await axios.post(`${API_BASE_URL}/analysis/run`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' }
     });
