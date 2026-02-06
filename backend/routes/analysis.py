@@ -18,9 +18,11 @@ from backend.services.ai_service import FinancialAIService
 from backend.services.translation import Translator
 from backend.services.db_service import save_sme_analysis
 
-# New Value-Added Services
+# Value-Added & Integration Services
 from backend.services.recommendation_engine import RecommendationEngine
 from backend.services.forecasting import FinancialForecaster
+from backend.services.tax_service import TaxComplianceService
+from backend.services.external_connector import ExternalConnector  # NEW
 
 # ----------------------------------
 # Router setup
@@ -42,6 +44,8 @@ ai_service = FinancialAIService()
 translator = Translator(ai_service=ai_service)
 recommendation_engine = RecommendationEngine()
 forecaster = FinancialForecaster()
+tax_service = TaxComplianceService()
+external_connector = ExternalConnector()  # NEW
 
 # ----------------------------------
 # Deterministic helpers
@@ -76,70 +80,58 @@ async def run_financial_analysis(
     db: Session = Depends(get_db)
 ):
     """
-    End-to-end SME financial health analysis:
-    File → Metrics → Risk → Credit → Products → Forecast → AI → Translation → DB
+    End-to-end SME financial health analysis pipeline:
+    Parsed Data + External API Verifications -> Insights.
     """
     temp_file_path = None
 
     try:
         logger.info(f"Received file for analysis: {file.filename}")
 
-        # -----------------------------
         # 0. Save uploaded file temporarily
-        # -----------------------------
         suffix = os.path.splitext(file.filename)[-1]
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             temp_file_path = tmp.name
             tmp.write(await file.read())
 
-        # -----------------------------
         # 1. Parsing & Basic Metrics
-        # -----------------------------
         df = file_parser.parse_file(temp_file_path)
-        
-        # Standardize columns for the metrics engine
         df["type"] = df["type"].astype(str).str.lower().str.strip()
         df["type"] = df["type"].replace({"income": "credit", "expense": "debit"})
-        
         metrics = metrics_service.compute_financial_metrics(df)
 
-        # -----------------------------
-        # 2. Risk & Credit Evaluation
-        # -----------------------------
+        # 2. External Data Integration (NEW)
+        # We use a placeholder ID for simulation
+        external_insights = external_connector.get_integrated_data_summary(business_id=file.filename)
+
+        # 3. Risk & Credit Evaluation
         risk_result = risk_engine.evaluate_financial_risk(metrics)
         overall_risk = risk_result.get("overall_risk", "Unknown")
         credit_score, credit_grade = calculate_credit_score(metrics, risk_result)
 
-        # -----------------------------
-        # 3. Financial Product Recommendations (NEW)
-        # -----------------------------
+        # 4. Financial Product Recommendations
         product_recommendations = recommendation_engine.get_recommendations(
             metrics=metrics, 
             risk_level=overall_risk
         )
 
-        # -----------------------------
-        # 4. Financial Forecasting (NEW)
-        # -----------------------------
+        # 5. Financial Forecasting & Tax Check
         forecast_data = forecaster.project_cashflow(
             current_revenue=metrics.get("total_revenue", 0.0),
             current_expenses=metrics.get("total_expenses", 0.0)
         )
+        tax_report = tax_service.perform_tax_check(metrics)
 
-        # -----------------------------
-        # 5. AI Narrative & Translation
-        # -----------------------------
+        # 6. AI Narrative & Translation
         ai_report = ai_service.generate_financial_report(
-            metrics_context=str(metrics),
+            metrics_context=f"Financials: {metrics}, External Status: {external_insights}",
             risk_context=str(risk_result)
         )
 
         if language.lower() != "en":
             ai_report = translator.translate_report(ai_report, language)
 
-        # -----------------------------
-        # 6. Database Persistence
-        # -----------------------------
+        # 7. Database Persistence
         db_entry = save_sme_analysis(
             db=db,
             business_name=file.filename,
@@ -159,7 +151,8 @@ async def run_financial_analysis(
                 "status": "success",
                 "business_info": {
                     "type": business_type,
-                    "source": file.filename
+                    "source": file.filename,
+                    "external_verifications": external_insights # NEW
                 },
                 "financial_summary": {
                     "metrics": metrics, 
@@ -171,6 +164,7 @@ async def run_financial_analysis(
                 },
                 "projections": forecast_data,
                 "banking_products": product_recommendations,
+                "tax_compliance": tax_report,
                 "ai_report": ai_report,
                 "meta": {
                     "language": language,
